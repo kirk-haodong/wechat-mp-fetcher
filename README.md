@@ -1,7 +1,7 @@
 # WeChat MP Fetcher
 
 <p align="center">
-  <img src="assets/logo.png" alt="WeChat MP Fetcher Logo" width="120">
+  <img src="https://github.com/kirk-haodong/wechat-mp-fetcher/blob/master/assets/logo.png?raw=true" alt="WeChat MP Fetcher Logo" width="120">
 </p>
 
 <p align="center">
