@@ -17,8 +17,10 @@ metadata:
 - 🐳 Docker 自动部署 we-mp-rss 服务
 - 📱 微信公众号平台扫码登录
 - 🔍 搜索并添加公众号
-- 📄 自动抓取文章内容
+- 📄 自动抓取文章列表
+- 📖 **全文内容抓取**（使用 Playwright 浏览器）
 - 📊 文章统计与管理
+- 🤖 基于内容的智能分类总结
 
 ## 前置要求
 
@@ -61,7 +63,7 @@ python3 scripts/add_mp.py "量子位"
 ### 4. 抓取文章
 
 ```bash
-# 抓取所有公众号文章
+# 抓取所有公众号文章（包含全文内容）
 python3 scripts/fetch_articles.py --all
 
 # 抓取指定公众号
@@ -69,6 +71,16 @@ python3 scripts/fetch_articles.py --mp "新智元"
 
 # 指定抓取页数
 python3 scripts/fetch_articles.py --mp "新智元" --pages 2
+```
+
+### 5. 生成内容总结
+
+```bash
+# 基于全文内容生成每日热点总结
+python3 scripts/generate_summary.py --days 1
+
+# 生成过去24小时的总结
+python3 scripts/generate_summary.py --hours 24
 ```
 
 ## 详细工作流程
@@ -79,16 +91,26 @@ python3 scripts/fetch_articles.py --mp "新智元" --pages 2
    - 验证 Docker 是否安装
    - 检查端口 4000 是否可用
 
-2. **启动 we-mp-rss 容器**
+2. **启动 we-mp-rss 容器（启用全文抓取）**
    ```bash
    docker run -d --name we-mp-rss \
      -p 4000:4000 \
      -e DATABASE_TYPE=sqlite \
      -e AUTH_CODE=wemp2024 \
+     -e GATHER_CONTENT=True \
+     -e GATHER_CONTENT_AUTO_CHECK=True \
+     -e GATHER_CONTENT_AUTO_INTERVAL=30 \
+     -e GATHER_CLEAN_HTML=True \
      -v ./data:/app/data \
      --restart unless-stopped \
      rachelos/we-mp-rss:latest
    ```
+   
+   **全文抓取配置说明：**
+   - `GATHER_CONTENT=True` - 启用全文内容抓取
+   - `GATHER_CONTENT_AUTO_CHECK=True` - 自动检查并补全缺失内容
+   - `GATHER_CONTENT_AUTO_INTERVAL=30` - 每30分钟检查一次
+   - `GATHER_CLEAN_HTML=True` - 自动清理HTML标签
 
 3. **验证服务状态**
    - 等待服务启动（约 10 秒）
@@ -131,20 +153,38 @@ python3 scripts/fetch_articles.py --mp "新智元" --pages 2
 
 ### 文章抓取流程
 
-1. **触发抓取任务**
+1. **触发文章列表抓取**
    ```bash
    curl -s "http://localhost:4000/api/v1/wx/mps/update/{mp_id}?start_page=0&end_page=2" \
      -H "Authorization: Bearer $(python3 scripts/get_token.py)"
    ```
 
-2. **查看抓取进度**
+2. **等待全文内容抓取**
+   - we-mp-rss 自动使用 Playwright 浏览器访问文章链接
+   - 每篇文章内容抓取需要 3-5 秒
+   - 自动清理 HTML 标签，保留纯文本内容
+   - 等待约 60-120 秒让内容抓取完成
+
+3. **查看抓取进度**
    ```bash
    docker logs we-mp-rss --tail 20
    ```
 
-3. **验证文章保存**
-   - 文章保存到 SQLite 数据库
+4. **验证文章保存**
+   - 文章元数据保存到 SQLite 数据库
+   - 文章正文内容保存到 `content` 字段
    - 查看 `data/db.db` 中的 `articles` 表
+
+5. **查询有内容的文章**
+   ```python
+   import sqlite3
+   conn = sqlite3.connect('data/db.db')
+   cursor = conn.cursor()
+   cursor.execute('SELECT COUNT(*) FROM articles WHERE LENGTH(content) > 0')
+   count = cursor.fetchone()[0]
+   print(f"有内容的文章: {count} 篇")
+   conn.close()
+   ```
 
 ## 脚本说明
 
@@ -183,6 +223,35 @@ python3 scripts/fetch_articles.py --mp "新智元"
 # 指定页数
 python3 scripts/fetch_articles.py --mp "新智元" --pages 2
 ```
+
+### generate_summary.py
+基于全文内容生成每日热点总结
+
+```bash
+# 生成过去24小时的总结
+python3 scripts/generate_summary.py --hours 24
+
+# 生成过去3天的总结
+python3 scripts/generate_summary.py --days 3
+
+# 输出示例：
+# === 📱 AI 每日热点 | 2026年02月26日 ===
+# ## 大模型/AI技术
+# 1. **标题**
+#    📰 来源 | 🕐 时间
+#    📝 摘要
+#    🔗 链接
+# 
+# ### 🔥 热点关键词
+# - 关键词: 次数
+```
+
+**功能说明：**
+- 自动筛选有全文内容的文章
+- 基于内容智能分类（AI技术/公司动态/学术研究等）
+- 提取文章摘要（前200字）
+- 识别关键词和热点
+- 统计关键词出现频率
 
 ### show_stats.py
 显示统计信息
@@ -321,6 +390,57 @@ docker restart we-mp-rss
 
 ---
 
+### 🔴 问题6：文章没有正文内容（content 为空）
+
+**现象**：
+- 文章列表抓取成功
+- 但 `content` 字段为空或长度为 0
+- 只能看到标题，无法生成内容总结
+
+**原因**：
+- 未启用全文内容抓取功能
+- `GATHER_CONTENT` 环境变量设置为 `False`
+
+**解决**：
+
+**方案 A：重新部署容器（推荐）**
+```bash
+# 停止并删除旧容器
+docker stop we-mp-rss
+docker rm we-mp-rss
+
+# 重新部署，启用全文抓取
+docker run -d --name we-mp-rss \
+  -p 4000:4000 \
+  -e DATABASE_TYPE=sqlite \
+  -e AUTH_CODE=wemp2024 \
+  -e GATHER_CONTENT=True \
+  -e GATHER_CONTENT_AUTO_CHECK=True \
+  -e GATHER_CONTENT_AUTO_INTERVAL=30 \
+  -e GATHER_CLEAN_HTML=True \
+  -v "./data:/app/data" \
+  --restart unless-stopped \
+  rachelos/we-mp-rss:latest
+```
+
+**方案 B：等待自动补全**
+- 启用 `GATHER_CONTENT_AUTO_CHECK=True` 后
+- 系统每 59 分钟自动检查并补全缺失的内容
+- 需要等待 1-2 轮检查周期
+
+**验证方法**：
+```python
+import sqlite3
+conn = sqlite3.connect('data/db.db')
+cursor = conn.cursor()
+cursor.execute('SELECT COUNT(*) FROM articles WHERE LENGTH(content) > 0')
+count = cursor.fetchone()[0]
+print(f"有内容的文章: {count} 篇")
+conn.close()
+```
+
+---
+
 ## 常见问题
 
 ### Q: 二维码扫描后显示登录成功，但搜索失败？
@@ -360,9 +480,12 @@ A: 会，通常几天后需要重新登录。重新运行登录流程即可。
 | id | 文章唯一ID |
 | mp_id | 所属公众号ID |
 | title | 文章标题 |
-| content | 文章内容 |
-| publish_time | 发布时间 |
+| content | **文章正文内容**（HTML格式，已清理标签） |
+| description | 文章摘要 |
+| publish_time | 发布时间（Unix时间戳） |
 | url | 文章链接 |
+| pic_url | 封面图片URL |
+| status | 状态 (1=正常) |
 
 ## 参考
 
