@@ -284,7 +284,8 @@ wechat-mp-fetcher/
 ├── data/                  # Data directory
 │   └── db.db              # SQLite database
 └── assets/                # Assets
-    └── logo.png           # Logo
+    ├── logo.png           # Logo
+    └── logo.svg           # Logo (SVG)
 ```
 
 ## Tech Stack / 技术栈 / 技術スタック
